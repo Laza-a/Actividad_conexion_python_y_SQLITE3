@@ -65,13 +65,24 @@ def bloquear_botones(estado):
     boton_tijera.config(state=estado)
 
 
-def nueva_partida():
+# Identificador para invalidar cuentas regresivas de partidas anteriores
+id_partida = 0
+temporizador_id = None
 
+
+def nueva_partida():
     global victorias, derrotas, empates
     global ronda, jugando, cuenta_activa
+    global id_partida, temporizador_id
 
-    if cuenta_activa:
-        return
+    # Invalida cualquier cuenta regresiva que haya quedado pendiente
+    id_partida += 1
+    if temporizador_id is not None:
+        try:
+            ventana.after_cancel(temporizador_id)
+        except tk.TclError:
+            pass
+        temporizador_id = None
 
     victorias = 0
     derrotas = 0
@@ -79,61 +90,53 @@ def nueva_partida():
     ronda = 0
 
     jugando = True
+    cuenta_activa = False
 
     cartel.config(
         text="¡QUE COMIENCE EL DESAFIO!",
         bg="#263653"
     )
-
     texto_elecciones.config(text="Elegí tu primera jugada")
-
     actualizar_marcador()
+
     bloquear_botones("normal")
 
-    boton_nueva.config(state="disabled")
+    # El botón queda siempre visible y vuelve a su texto inicial
+    boton_nueva.config(
+        state="normal",
+        text="🔄 NUEVA PARTIDA"
+    )
 
 
-def cuenta_regresiva(numero, opcion):
+def cuenta_regresiva(numero, opcion, partida):
+    global temporizador_id
 
-    global cuenta_activa
-
-    cuenta_activa = True
-    bloquear_botones("disabled")
+    # Si se inició otra partida, esta cuenta regresiva ya no sirve
+    if partida != id_partida or not jugando:
+        return
 
     if numero > 0:
-
-        cartel.config(
-            text=str(numero),
-            bg="#263653"
-        )
-
-        ventana.after(
+        bloquear_botones("disabled")
+        cartel.config(text=str(numero), bg="#263653")
+        temporizador_id = ventana.after(
             800,
-            lambda: cuenta_regresiva(numero - 1, opcion)
+            lambda: cuenta_regresiva(numero - 1, opcion, partida)
         )
-
     else:
-
-        cartel.config(
-            text="¡YA!",
-            bg="#16834a"
-        )
-
-        ventana.after(
+        cartel.config(text="¡YA!", bg="#16834a")
+        temporizador_id = ventana.after(
             500,
-            lambda: jugar(opcion)
+            lambda: jugar(opcion, partida)
         )
 
 
 def iniciar_jugada(opcion):
-
     global jugando, cuenta_activa
 
     if not jugando or cuenta_activa:
         return
 
     nombre = entrada_nombre.get().strip()
-
     if nombre == "":
         messagebox.showwarning(
             "Atención",
@@ -141,124 +144,110 @@ def iniciar_jugada(opcion):
         )
         return
 
-    cuenta_regresiva(3, opcion)
+    cuenta_activa = True
+    bloquear_botones("disabled")
+    cuenta_regresiva(3, opcion, id_partida)
 
 
-def jugar(opcion):
-
+def jugar(opcion, partida):
     global victorias, derrotas, empates
-    global ronda, jugando, cuenta_activa
+    global ronda, jugando, cuenta_activa, temporizador_id
 
+    # Evita que una jugada vieja afecte a una partida nueva
+    if partida != id_partida or not jugando:
+        return
+
+    temporizador_id = None
     cuenta_activa = False
-
     computadora = random.choice(opciones)
 
-    ronda += 1
-
-    # Comparar elecciones
-
     if opcion == computadora:
-
         resultado = "Empate"
         empates += 1
-
         cartel.config(
-            text="¡EMPATE!",
+            text="¡EMPATE! NO CUENTA COMO RONDA",
             bg="#d69e22"
         )
 
-    elif (opcion == "piedra" and computadora == "tijera") or \
-         (opcion == "papel" and computadora == "piedra") or \
-         (opcion == "tijera" and computadora == "papel"):
-
+    elif (
+        (opcion == "piedra" and computadora == "tijera") or
+        (opcion == "papel" and computadora == "piedra") or
+        (opcion == "tijera" and computadora == "papel")
+    ):
         resultado = "Victoria"
         victorias += 1
-
+        ronda += 1
         cartel.config(
             text="¡GANASTE LA RONDA!",
             bg="#16834a"
         )
 
     else:
-
         resultado = "Derrota"
         derrotas += 1
-
+        ronda += 1
         cartel.config(
             text="¡PERDISTE LA RONDA!",
             bg="#b83232"
         )
-
-    # Mostrar elecciones
 
     texto_elecciones.config(
         text=f"Vos: {opcion.upper()}     |     "
              f"Computadora: {computadora.upper()}"
     )
 
-    # Guardar en SQLite
-
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO partidas
         (nombre, jugador, computadora, resultado, fecha)
         VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
-    """, (
-        entrada_nombre.get().strip(),
-        opcion,
-        computadora,
-        resultado
-    ))
-
+        """,
+        (
+            entrada_nombre.get().strip(),
+            opcion,
+            computadora,
+            resultado
+        )
+    )
     conexion.commit()
 
     actualizar_marcador()
-
-    # Actualizar las otras pestañas
-
     actualizar_ranking()
     mostrar_historial()
     actualizar_estadisticas()
 
-    # Comprobar si terminó el mejor de 5
-
-    if victorias == 3 or derrotas == 3:
-
+    if victorias >= 3 or derrotas >= 3:
         jugando = False
-
+        cuenta_activa = False
         bloquear_botones("disabled")
-        boton_nueva.config(state="normal")
+        boton_nueva.config(
+            state="normal",
+            text="🔄 VOLVER A JUGAR"
+        )
 
-        if victorias == 3:
-
+        if victorias >= 3:
             cartel.config(
                 text="¡GANASTE EL PARTIDO!",
                 bg="#16834a"
             )
-
             messagebox.showinfo(
                 "CAMPEÓN",
-                "¡Felicitaciones! Ganaste el mejor de 5."
+                "¡Felicitaciones! Ganaste el partido."
             )
-
         else:
-
             cartel.config(
                 text="FIN DEL PARTIDO",
                 bg="#b83232"
             )
-
             messagebox.showinfo(
                 "Fin del partido",
                 "Esta vez ganó la computadora. ¡A intentarlo otra vez!"
             )
-
     else:
-
         bloquear_botones("normal")
 
 
 def actualizar_marcador():
-
     marcador.config(
         text=f"RONDA: {ronda} / 5\n"
              f"🏆 VOS: {victorias}     "
@@ -506,6 +495,21 @@ tk.Label(
 ).pack(pady=15)
 
 
+# Botón de reinicio: queda arriba para que siempre esté visible
+boton_nueva = tk.Button(
+    pestana_juego,
+    text="🔄 NUEVA PARTIDA",
+    font=("Arial", 12, "bold"),
+    bg="#16834a",
+    fg="white",
+    activebackground="#20a05b",
+    activeforeground="white",
+    command=nueva_partida,
+    state="normal"
+)
+boton_nueva.pack(pady=5)
+
+
 # Botones de elecciones
 
 marco_botones = tk.Frame(
@@ -591,20 +595,6 @@ marcador = tk.Label(
 )
 
 marcador.pack(pady=15)
-
-
-# Boton nueva partida
-
-boton_nueva = tk.Button(
-    pestana_juego,
-    text="🔄 NUEVA PARTIDA",
-    font=("Arial", 12, "bold"),
-    bg="#16834a",
-    fg="white",
-    command=nueva_partida
-)
-
-boton_nueva.pack(pady=10)
 
 
 # =====================================
@@ -793,6 +783,7 @@ tk.Button(
 ventana.protocol("WM_DELETE_WINDOW", cerrar)
 
 
+
 # =====================================
 # 14. INICIAR PROGRAMA
 # =====================================
@@ -800,6 +791,6 @@ ventana.protocol("WM_DELETE_WINDOW", cerrar)
 actualizar_ranking()
 mostrar_historial()
 
-bloquear_botones("disabled")
+nueva_partida()
 
 ventana.mainloop()
